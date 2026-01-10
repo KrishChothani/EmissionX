@@ -1,22 +1,22 @@
 import { AsyncHandler } from '../Utils/AsyncHandler.js';
 import { ApiError } from "../Utils/ApiError.js";
 import { User } from "../Models/user.model.js";
+import { Fpo } from '../Models/fpo.model.js';
 import { ApiResponse } from "../Utils/ApiResponse.js";
 import jwt from "jsonwebtoken";
 import nodemailer from "nodemailer";
 import mongoose from 'mongoose';
 // import { User } from '../Models/user.model.js';
 const LOGIN_USER_MAIL_TEMPLET = (link) => ({
-  subject: "Verify Your Email - Welcome to MatterAssist!",
-  text: "Welcome to MatterAssist! Please verify your email.",
+  subject: "Verify Your Email - Welcome to Carbon Credit Platform!",
+  text: "Welcome to Carbon Credit Platform! Please verify your email.",
   html: `
 <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px; background-color: #ffffff;">
   <div style="text-align: center;">
-    <img src="https://res.cloudinary.com/krishchothani/image/upload/v1748430624/3_ckgvod.png" alt="MatterAssist" style="height: 60px; margin-bottom: 20px;" />
-    <h2 style="color: #333;">Welcome to <span style="color: #4CAF50;">MatterAssist</span> 👋</h2>
+    <h2 style="color: #333;">Welcome to <span style="color: #4CAF50;">Carbon Credit Platform</span> 🌱</h2>
   </div>
   <p style="color: #555; font-size: 16px;">
-    We're excited to have you on board. Before we get started, please verify your email address so we can ensure it's really you.
+    Thank you for joining our sustainable agriculture platform. Please verify your email address to get started with carbon credit tracking.
   </p>
   <div style="text-align: center; margin: 30px 0;">
     <a href="${link}" style="display: inline-block; background-color: #4CAF50; color: white; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: bold;">
@@ -26,8 +26,9 @@ const LOGIN_USER_MAIL_TEMPLET = (link) => ({
 </div>
 `
 });
+
 const RESET_PASSWORD_MAIL_TEMPLATE = (link) => ({
-  subject: "MatterAssist Password Reset Instructions",
+  subject: "Carbon Credit Platform Password Reset Instructions",
   text: `We received a password reset request. Use this link within 15 minutes:\n${link}\n\nIf you didn't request this, please ignore this email.`,
   html: `
   <!DOCTYPE html>
@@ -39,10 +40,7 @@ const RESET_PASSWORD_MAIL_TEMPLATE = (link) => ({
   <body style="margin:0;padding:30px 0;background:#f9f9f9;">
     <div style="max-width:600px;margin:auto;background:#fff;border-radius:8px;padding:30px;">
       <div style="text-align:center;margin-bottom:20px;">
-        <img src="https://res.cloudinary.com/krishchothani/image/upload/v1748430624/3_ckgvod.png" 
-             alt="MatterAssist" 
-             width="120" 
-             style="height:auto;">
+        <h2 style="color: #333;">Carbon Credit Platform 🌱</h2>
       </div>
       <p style="color:#555;line-height:1.6;font-size:16px;">
         Please click the button below to reset your password:
@@ -57,7 +55,7 @@ const RESET_PASSWORD_MAIL_TEMPLATE = (link) => ({
         This link expires in 15 minutes. If you didn't request this, no action is needed.
       </p>
       <div style="color:#666;font-size:12px;text-align:center;margin-top:30px;">
-        <p>MatterAssist Team</p>
+        <p>Carbon Credit Platform Team</p>
       </div>
     </div>
   </body>
@@ -85,102 +83,144 @@ const generateAccessAndRefreshToken = async (userId) => {
 
 const registerUser = AsyncHandler (async (req, res) => {
 
-  const { fullName, email, userName, password } = req.body;
+  const { name, email, phone, passwordHash, role = "FARMER", fpoId = null } = req.body;
 
+  // Validate required fields
   if (
-    [fullName, email, userName, password].some((field) => field?.trim() === "")
+    [name, email, phone, passwordHash].some((field) => field?.trim() === "")
   ) {
-    throw new ApiError(400, "All fields are required");
+    throw new ApiError(400, "Name, email, phone, and password are required");
   }
 
+  // Validate role
+  if (!["FARMER", "FPO_ADMIN", "ADMIN"].includes(role)) {
+    throw new ApiError(400, "Invalid role. Must be FARMER, FPO_ADMIN, or ADMIN");
+  }
+
+  // Check if user already exists
   const existedUser = await User.findOne({
-    $or: [{ userName }, { email }],
+    $or: [{ phone }, { email }],
   });
 
   if (existedUser) {
-    throw new ApiError(409, "User already exists");
+    throw new ApiError(409, "User with this phone or email already exists");
+  }
+
+  // If FPO_ADMIN or user has fpoId, validate FPO exists
+  if (fpoId) {
+    const fpoExists = await Fpo.findById(fpoId);
+    if (!fpoExists) {
+      throw new ApiError(404, "FPO not found");
+    }
   }
 
   const user = await User.create({
-    fullName,
-    email,
-    password,
-    userName: userName.toLowerCase(),
+    name: name.trim(),
+    email: email.toLowerCase().trim(),
+    phone: phone.trim(),
+    passwordHash,
+    role,
+    fpoId: fpoId || null,
+    isActive: true
   });
 
-  const createdUser = await User.findById(user._id).select(
-    "-password -refreshToken"
-  );
+  const createdUser = await User.findById(user._id)
+    .select("-passwordHash -refreshToken")
+    .populate('fpoId', 'name region');
 
   if (!createdUser) {
-    throw new ApiError(500, "something went wrong while register the user");
+    throw new ApiError(500, "Something went wrong while registering the user");
   }
 
-  const token = jwt.sign({ email }, process.env.JWT_SECRET, {
+  // Generate verification token
+  const token = jwt.sign({ email: user.email, userId: user._id }, process.env.JWT_SECRET, {
     expiresIn: "30m",
   });
-  const verifyLink = `https://www.matterassist.com/verify-email?token=${token}`;
-  const loginEmailTemplate = LOGIN_USER_MAIL_TEMPLET(verifyLink);
-  const send_email = await sendMail(email, loginEmailTemplate);
+  
+  // Update email template for Carbon Credit Platform
+  const verifyLink = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/verify-email?token=${token}`;
+  const emailTemplate = {
+    subject: "Verify Your Email - Welcome to Carbon Credit Platform!",
+    text: "Welcome to Carbon Credit Platform! Please verify your email.",
+    html: `
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px; background-color: #ffffff;">
+      <div style="text-align: center;">
+        <h2 style="color: #333;">Welcome to <span style="color: #4CAF50;">Carbon Credit Platform</span> 🌱</h2>
+      </div>
+      <p style="color: #555; font-size: 16px;">
+        Thank you for joining our sustainable agriculture platform. Please verify your email address to get started with carbon credit tracking.
+      </p>
+      <div style="text-align: center; margin: 30px 0;">
+        <a href="${verifyLink}" style="display: inline-block; background-color: #4CAF50; color: white; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: bold;">
+          Verify My Email
+        </a>
+      </div>
+      <p style="color: #777; font-size: 14px;">
+        Role: ${role}<br>
+        ${fpoId ? 'You are associated with an FPO organization.' : ''}
+      </p>
+    </div>
+    `
+  };
 
-  // console.log("send_email" , send_email);
-  if (!send_email) {
-    throw new ApiError(500, "something went wrong while sending the email");
-  }
+  const send_email = await sendMail(email, emailTemplate);
+
+  // if (!send_email) {
+  //   throw new ApiError(500, "Something went wrong while sending the verification email");
+  // }
 
   return res
     .status(201)
     .json(
       new ApiResponse(
-        200,
+        201,
         createdUser,
-        "USer registration completed successfully"
+        "User registration completed successfully. Please check your email for verification."
       )
     );
 });
 
 const loginUser = AsyncHandler(async (req, res) => {
-
-
-  const { email, userName, password } = req.body;
-  if (!email && !userName) {
-    throw new ApiError(400, "username or email is required");
+  const { email, phone, passwordHash } = req.body;
+  
+  // Either email or phone is required
+  if (!email && !phone) {
+    throw new ApiError(400, "Email or phone number is required");
   }
 
+  if (!passwordHash) {
+    throw new ApiError(400, "Password is required");
+  }
+
+  // Find user by email or phone
   const user = await User.findOne({
-    $or: [{ userName }, { email }],
-  });
+    $or: [{ email }, { phone }],
+    isActive: true
+  }).populate('fpoId', 'name region membersCount');
 
   if (!user) {
-    throw new ApiError(404, "User does not exist");
+    throw new ApiError(404, "User does not exist or account is inactive");
   }
 
-  const isPasswordValid = await user.isPasswordCorrect(password);
+  const isPasswordValid = await user.isPasswordCorrect(passwordHash);
   if (!isPasswordValid) {
-    // console.error("Password is not valid");
-    throw new ApiError(401, "Password is not valid");
-  }
-  // console.log(req.body);
-
-  if(!user.verified){
-    // console.log("verify your google account");
-    throw new ApiError("404" , "Verify your google account.");
+    throw new ApiError(401, "Invalid credentials");
   }
 
+  // Check if email is verified (you might want to add a verified field to the schema)
+  // For now, we'll assume all users are verified after registration
+  
   const { accessToken, refreshToken } = await generateAccessAndRefreshToken(
     user._id
   );
 
-  const loggedInUSer = await User.findById(user._id).select(
-    "-password -refreshToken "
-  );
-
-
-  // console.log(loggedInUSer);
+  const loggedInUser = await User.findById(user._id)
+    .select("-passwordHash -refreshToken")
+    .populate('fpoId', 'name region membersCount');
 
   const options = {
     httpOnly: true,
-    secure: true,
+    secure: process.env.NODE_ENV === 'production',
     sameSite: "None",
   };
 
@@ -192,7 +232,7 @@ const loginUser = AsyncHandler(async (req, res) => {
       new ApiResponse(
         200,
         {
-          user: loggedInUSer,
+          user: loggedInUser,
           accessToken,
           refreshToken,
         },
@@ -327,9 +367,6 @@ const sendResetPasswordEmail = AsyncHandler(async (req, res) => {
 });
 const resetPassword = AsyncHandler(async (req, res) => {
   const { token, newPassword } = req.body;
-  // console.log("---------------------------------------------------------")
-  // console.log(token,newPassword)
-  // console.log("---------------------------------------------------------");
 
   if (!token || !newPassword) {
     throw new ApiError(400, "Token and new password are required");
@@ -343,7 +380,7 @@ const resetPassword = AsyncHandler(async (req, res) => {
       throw new ApiError(404, "User not found");
     }
 
-    user.password = newPassword;
+    user.passwordHash = newPassword;
     await user.save({ validateBeforeSave: true });
 
     return res
@@ -361,107 +398,105 @@ const getCurrentUser = AsyncHandler(async (req, res) => {
 });
 
 const updateaccountDetails = AsyncHandler(async (req, res) => {
-  const { fullName, email } = req.body;
+  const { name, email, phone } = req.body;
 
-  if (!fullName && !email) {
-    throw new ApiError(400, "All fields are required");
+  if (!name && !email && !phone) {
+    throw new ApiError(400, "At least one field (name, email, or phone) is required");
   }
 
-  const user = await User.findByIdAndUpdate(
-    req.user?._id,
-    {
-      $set: {
-        fullName: fullName,
-        email: email, 
-      },
-    },
-    { new: true }
-  ).select("-password");
+  // Check if email or phone already exists for other users
+  if (email || phone) {
+    const existingUser = await User.findOne({
+      _id: { $ne: req.user._id },
+      $or: [
+        ...(email ? [{ email }] : []),
+        ...(phone ? [{ phone }] : [])
+      ]
+    });
 
-  return res.status(200).json(new ApiResponse(200, user, "Account Details"));
+    if (existingUser) {
+      throw new ApiError(409, "Email or phone number already exists");
+    }
+  }
+
+  const updateFields = {};
+  if (name) updateFields.name = name.trim();
+  if (email) updateFields.email = email.toLowerCase().trim();
+  if (phone) updateFields.phone = phone.trim();
+
+  const user = await User.findByIdAndUpdate(
+    req.user._id,
+    { $set: updateFields },
+    { new: true }
+  )
+  .select("-passwordHash -refreshToken")
+  .populate('fpoId', 'name region');
+
+  return res.status(200).json(
+    new ApiResponse(200, user, "Account details updated successfully")
+  );
 });
 
 const resendEmailVerification = AsyncHandler(async(req,res) => {
-  const { email } =req.body;
+  const { email } = req.body;
 
   if (!email) {
-    throw new ApiError(404, "Please Enter the Email Id.")
+    throw new ApiError(400, "Please enter the email address.")
   }
-  const user = await User.findOne({ email: email });
+  
+  const user = await User.findOne({ email: email.toLowerCase().trim() });
 
   if(!user){
-    throw new ApiError(404, "Email Id Is not Found.");
-  }
-  const token = jwt.sign({ email }, process.env.JWT_SECRET, {
-    expiresIn: "30m",
-  });
-  const verifyLink = `https://www.matterassist.com/verify-email?token=${token}`;
-  const loginEmailTemplate = LOGIN_USER_MAIL_TEMPLET(verifyLink);
-  const send_email = await sendMail(email, loginEmailTemplate);
-  // const send_email = await sendMail(email);
-  // console.log(send_email);
-  if (!send_email) {
-    throw new ApiError(500, "something went wrong while sending the email");
+    throw new ApiError(404, "Email address not found.");
   }
 
-  return res.status(201).json(
-    new ApiResponse(200, send_email ,"Email Send Successfully on Given EmailId")
+  // Generate new verification token
+  const token = jwt.sign({ email: user.email, userId: user._id }, process.env.JWT_SECRET, {
+    expiresIn: "30m",
+  });
+  
+  const verifyLink = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/verify-email?token=${token}`;
+  const loginEmailTemplate = LOGIN_USER_MAIL_TEMPLET(verifyLink);
+  const send_email = await sendMail(email, loginEmailTemplate);
+
+  if (!send_email) {
+    throw new ApiError(500, "Something went wrong while sending the verification email");
+  }
+
+  return res.status(200).json(
+    new ApiResponse(200, { emailSent: true }, "Verification email sent successfully")
   )
 })
 
 const sendMail = async (emailId, htmlContent) => {
-  // console.log("emailId", emailId, htmlContent);
   try {
-    const auth = nodemailer.createTransport({
-      host: "smtp.zoho.in",
-      port: 465,
-      secure: true,
-      auth: {
-        user: "verify@matterassist.com",
-        pass: "SVEzd6tcBWKQ",
-      },
-    });
+    // const auth = nodemailer.createTransporter({
+    //   host: "smtp.gmail.in",
+    //   port: 465,
+    //   secure: true,
+    //   auth: {
+    //     user: "krishchothani259@gmail.com",
+    //     pass: "dofsbprmfxdfljbe",
+    //   },
+    // });
 
-  //   const receiver = {
-  //     from: '"MatterAssist" <verify@matterassist.com>',
-  //     to: emailId,
-  //     subject: "Verify Your Email - Welcome to MatterAssist!",
-  //     text: "Welcome to MatterAssist! Please verify your email.",
-  //     html: `
-  //   <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px; background-color: #ffffff;">
-  //     <div style="text-align: center;">
-  //       <img src="https://res.cloudinary.com/krishchothani/image/upload/v1748430624/3_ckgvod.png" alt="MatterAssist Logo" style="height: 60px; margin-bottom: 20px;" />
-  //       <h2 style="color: #333;">Welcome to <span style="color: #4CAF50;">MatterAssist</span> 👋</h2>
-  //     </div>
-  //     <p style="color: #555; font-size: 16px;">
-  //       We're excited to have you on board. Before we get started, please verify your email address so we can ensure it's really you.
-  //     </p>
-  //     <div style="text-align: center; margin: 30px 0;">
-  //       <a href="${verifyLink}" style="display: inline-block; background-color: #4CAF50; color: white; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: bold;">
-  //         Verify My Email
-  //       </a>
-  //     </div>
-  //   </div>
-  // `,
-  //   };
-  const receiver = {
-    from: '"MatterAssist" <verify@matterassist.com>',
-    to: emailId,
-    ...htmlContent,
-  };
+    // const receiver = {
+    //   from: `"Carbon Credit Platform" <${process.env.SMTP_USER || 'verify@carbonplatform.com'}>`,
+    //   to: emailId,
+    //   ...htmlContent,
+    // };
 
-
-    return new Promise((resolve, reject) => {
-      auth.sendMail(receiver, (err, email_res) => {
-        if (err) {
-          // console.log("Error:", err);
-          reject(new Error("Email sending failed"));
-        } else {
-          // console.log("Email Sent:", email_res);
-          resolve(email_res);
-        }
-      });
-    });
+    // return new Promise((resolve, reject) => {
+    //   auth.sendMail(receiver, (err, email_res) => {
+    //     if (err) {
+    //       console.error("Email sending error:", err);
+    //       reject(new Error("Email sending failed"));
+    //     } else {
+    //       console.log("Email sent successfully:", email_res.messageId);
+    //       resolve(email_res);
+    //     }
+    //   });
+    // });
   } catch (error) {
     throw new ApiError(500, "Something went wrong while sending the email");
   }
@@ -471,58 +506,81 @@ const verifyEmail = AsyncHandler(async (req, res) => {
   try {
     const { token } = req.query;
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    // console.log()
-    // console.log("---------------decoded------------------",decoded);
-    const data = await User.findOneAndUpdate(
+    
+    const user = await User.findOneAndUpdate(
       { email: decoded.email },
-      { $set: { verified: true } },
-      {new : true }
-    );
-    // console.log("verified",data);
+      { $set: { isActive: true } }, // Using isActive instead of verified
+      { new: true }
+    ).select("-passwordHash -refreshToken");
 
-    return res.status(200).json("Email verified successfully");
+    if (!user) {
+      throw new ApiError(404, "User not found");
+    }
+
+    return res.status(200).json(
+      new ApiResponse(200, { user }, "Email verified successfully")
+    );
   } catch (error) {
-    throw new ApiError(500, "Something went wrong while verifying Email Address");
+    if (error.name === 'JsonWebTokenError') {
+      throw new ApiError(400, "Invalid verification token");
+    }
+    if (error.name === 'TokenExpiredError') {
+      throw new ApiError(400, "Verification token has expired");
+    }
+    throw new ApiError(500, "Something went wrong while verifying email address");
   }
 });
 
 const healthCheck = AsyncHandler(async (req, res) => {
   const userId = req.user._id;
-  const user = await User.findById(userId).select("-password"); // exclude password
+  const user = await User.findById(userId)
+    .select("-passwordHash -refreshToken")
+    .populate('fpoId', 'name region'); 
 
   if (!user) {
     return res.status(404).json(new ApiResponse(404, null, "User not found"));
   }
+  
   const showstatus = {
-        status: "OK",
-        user,
-        message: "Server is up and running"
-    }
+    status: "OK",
+    user,
+    message: "Carbon Credit Platform server is up and running"
+  }
+  
   return res
     .status(200)
-    .json(new ApiResponse(200, showstatus, "Account Details"));
+    .json(new ApiResponse(200, showstatus, "Health check successful"));
 });
 
 const getAllLawyers = AsyncHandler(async (req, res) => {
   const currentUserId = req.user._id;
-  // console.log(currentUserId)
-  const { page = 1, limit = 100 } = req.query;
+  const { page = 1, limit = 100, role, fpoId } = req.query;
 
-  // Fetch all active and verified users except the current user
-  const users = await User.find({
+  // Build filter query
+  const filter = {
     _id: { $ne: currentUserId }, // Exclude current user
-    verified: true
-  })
-  .select('fullName userName email')
-  .limit(limit * 1)
-  .skip((page - 1) * limit)
-  .sort({ fullName: 1 });
+    isActive: true
+  };
 
-  const total = await User.countDocuments({
-    _id: { $ne: currentUserId },
-    isActive: true,
-    isVerified: true
-  });
+  // Filter by role if specified
+  if (role && ["FARMER", "FPO_ADMIN", "ADMIN"].includes(role)) {
+    filter.role = role;
+  }
+
+  // Filter by FPO if specified
+  if (fpoId) {
+    filter.fpoId = fpoId;
+  }
+
+  // Fetch users with pagination
+  const users = await User.find(filter)
+    .select('name email phone role fpoId createdAt')
+    .populate('fpoId', 'name region')
+    .limit(limit * 1)
+    .skip((page - 1) * limit)
+    .sort({ name: 1 });
+
+  const total = await User.countDocuments(filter);
 
   return res.status(200).json(
     new ApiResponse(200, {
@@ -534,7 +592,7 @@ const getAllLawyers = AsyncHandler(async (req, res) => {
         hasPrev: page > 1,
         totalUsers: total
       }
-    }, "Lawyers retrieved successfully")
+    }, "Users retrieved successfully")
   );
 });
 // Get user profile by ID (for profile view)
@@ -547,18 +605,34 @@ const getUserProfile = AsyncHandler(async (req, res) => {
 
   const user = await User.findOne({
     _id: userId,
+    isActive: true
   })
-  .select('-password -refreshToken');
+  .select('-passwordHash -refreshToken')
+  .populate('fpoId', 'name region membersCount');
 
   if (!user) {
     throw new ApiError(404, "User not found");
   }
 
-  // You might want to include additional profile information here
-  // like cases worked on, team memberships, etc.
+  // Get additional profile statistics for farmers
+  let profileStats = {};
+  if (user.role === 'FARMER') {
+    const { Farm, CarbonCredit } = await import('../Models/index.js');
+    
+    const farmCount = await Farm.countDocuments({ farmerId: userId });
+    const totalCredits = await CarbonCredit.aggregate([
+      { $match: { farmerId: new mongoose.Types.ObjectId(userId) } },
+      { $group: { _id: null, total: { $sum: '$creditsIssued' } } }
+    ]);
+
+    profileStats = {
+      farmCount,
+      totalCarbonCredits: totalCredits[0]?.total || 0
+    };
+  }
 
   return res.status(200).json(
-    new ApiResponse(200, user, "User profile retrieved successfully")
+    new ApiResponse(200, { user, profileStats }, "User profile retrieved successfully")
   );
 });
 
@@ -572,12 +646,162 @@ const getMyId = AsyncHandler(async (req, res) => {
 });
 
 
+// Carbon Credit Platform specific functions
+const getUsersByRole = AsyncHandler(async (req, res) => {
+  const { role } = req.params;
+  const { page = 1, limit = 50 } = req.query;
+
+  if (!["FARMER", "FPO_ADMIN", "ADMIN"].includes(role)) {
+    throw new ApiError(400, "Invalid role specified");
+  }
+
+  const users = await User.find({ role, isActive: true })
+    .select('name email phone fpoId createdAt')
+    .populate('fpoId', 'name region')
+    .limit(limit * 1)
+    .skip((page - 1) * limit)
+    .sort({ name: 1 });
+
+  const total = await User.countDocuments({ role, isActive: true });
+
+  return res.status(200).json(
+    new ApiResponse(200, {
+      users,
+      pagination: {
+        current: parseInt(page),
+        total: Math.ceil(total / limit),
+        hasNext: page < Math.ceil(total / limit),
+        hasPrev: page > 1,
+        totalUsers: total
+      }
+    }, `${role}s retrieved successfully`)
+  );
+});
+
+const getFarmersByFPO = AsyncHandler(async (req, res) => {
+  const { fpoId } = req.params;
+  const { page = 1, limit = 50 } = req.query;
+
+  if (!mongoose.isValidObjectId(fpoId)) {
+    throw new ApiError(400, "Invalid FPO ID");
+  }
+
+  const farmers = await User.find({ 
+    fpoId, 
+    role: "FARMER", 
+    isActive: true 
+  })
+    .select('name email phone createdAt')
+    .limit(limit * 1)
+    .skip((page - 1) * limit)
+    .sort({ name: 1 });
+
+  const total = await User.countDocuments({ 
+    fpoId, 
+    role: "FARMER", 
+    isActive: true 
+  });
+
+  return res.status(200).json(
+    new ApiResponse(200, {
+      farmers,
+      pagination: {
+        current: parseInt(page),
+        total: Math.ceil(total / limit),
+        hasNext: page < Math.ceil(total / limit),
+        hasPrev: page > 1,
+        totalFarmers: total
+      }
+    }, "Farmers retrieved successfully")
+  );
+});
+
+const updateUserRole = AsyncHandler(async (req, res) => {
+  const { userId } = req.params;
+  const { role, fpoId } = req.body;
+
+  // Only ADMIN can change roles
+  if (req.user.role !== "ADMIN") {
+    throw new ApiError(403, "Only administrators can update user roles");
+  }
+
+  if (!mongoose.isValidObjectId(userId)) {
+    throw new ApiError(400, "Invalid user ID");
+  }
+
+  if (!["FARMER", "FPO_ADMIN", "ADMIN"].includes(role)) {
+    throw new ApiError(400, "Invalid role specified");
+  }
+
+  const updateData = { role };
+  
+  // If assigning to FPO, validate FPO exists
+  if (fpoId) {
+    const { Fpo } = await import('../Models/fpo.model.js');
+    const fpoExists = await Fpo.findById(fpoId);
+    if (!fpoExists) {
+      throw new ApiError(404, "FPO not found");
+    }
+    updateData.fpoId = fpoId;
+  } else if (role === "FARMER") {
+    // Farmers should have an FPO
+    updateData.fpoId = null;
+  }
+
+  const user = await User.findByIdAndUpdate(
+    userId,
+    updateData,
+    { new: true }
+  )
+    .select("-passwordHash -refreshToken")
+    .populate('fpoId', 'name region');
+
+  if (!user) {
+    throw new ApiError(404, "User not found");
+  }
+
+  return res.status(200).json(
+    new ApiResponse(200, user, "User role updated successfully")
+  );
+});
+
+const deactivateUser = AsyncHandler(async (req, res) => {
+  const { userId } = req.params;
+
+  // Only ADMIN can deactivate users
+  if (req.user.role !== "ADMIN") {
+    throw new ApiError(403, "Only administrators can deactivate users");
+  }
+
+  if (!mongoose.isValidObjectId(userId)) {
+    throw new ApiError(400, "Invalid user ID");
+  }
+
+  // Cannot deactivate self
+  if (userId === req.user._id.toString()) {
+    throw new ApiError(400, "Cannot deactivate your own account");
+  }
+
+  const user = await User.findByIdAndUpdate(
+    userId,
+    { isActive: false },
+    { new: true }
+  ).select("-passwordHash -refreshToken");
+
+  if (!user) {
+    throw new ApiError(404, "User not found");
+  }
+
+  return res.status(200).json(
+    new ApiResponse(200, user, "User deactivated successfully")
+  );
+});
+
 export {
   registerUser,
   loginUser,
   logoutUser,
   refreshAccessToken,
-  // changeCurrentPassword,
   getCurrentUser,
   updateaccountDetails,
   verifyEmail,
@@ -587,5 +811,10 @@ export {
   resetPassword,
   getAllLawyers,
   getUserProfile,
-  getMyId
+  getMyId,
+  // Carbon Credit Platform specific functions
+  getUsersByRole,
+  getFarmersByFPO,
+  updateUserRole,
+  deactivateUser
 };
