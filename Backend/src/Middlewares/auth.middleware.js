@@ -14,12 +14,17 @@ export const verifyJWT = AsyncHandler(async (req, _, next) => {
     }
 
     const decodedToken = jwt.verify(token, process.env.ACCESS_TOKEN_SECRET);
-    const user = await User.findById(decodedToken?._id).select(
-      "-password -refreshToken"
-    );
+    const user = await User.findById(decodedToken?._id)
+      .select("-passwordHash -refreshToken")
+      .populate('fpoId', 'name region');
 
     if (!user) {
       throw new ApiError(401, "Invalid access token");
+    }
+
+    // Check if user is active
+    if (!user.isActive) {
+      throw new ApiError(401, "Account is deactivated");
     }
 
     req.user = user;

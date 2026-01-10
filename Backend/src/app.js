@@ -31,10 +31,24 @@ app.use(express.json({ limit: "100mb" }));
 app.use(express.urlencoded({ extended: true, limit: "100mb" }));
 app.use(cookieParser());
 
+// Import routes
 import userRouter from "./Routes/user.routes.js";
+import fpoRouter from "./Routes/fpo.routes.js";
 
+// Route declarations
 app.use("/api/v1/users", userRouter);
+app.use("/api/v1/fpos", fpoRouter);
 
-// locahostt:2590 / api / v1 / users / register;
+// Health check endpoint
+app.get("/", (req, res) => {
+  res.json({
+    message: "Welcome to Carbon Credit Platform API",
+    version: "1.0.0",
+    endpoints: {
+      users: "/api/v1/users",
+      fpos: "/api/v1/fpos"
+    }
+  });
+});
 
 export { app };
