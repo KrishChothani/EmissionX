@@ -34,10 +34,12 @@ app.use(cookieParser());
 // Import routes
 import userRouter from "./Routes/user.routes.js";
 import fpoRouter from "./Routes/fpo.routes.js";
+import farmerRouter from "./Routes/farmer.routes.js";
 
 // Route declarations
 app.use("/api/v1/users", userRouter);
 app.use("/api/v1/fpos", fpoRouter);
+app.use("/api/v1/farmers", farmerRouter);
 
 // Health check endpoint
 app.get("/", (req, res) => {
@@ -46,7 +48,8 @@ app.get("/", (req, res) => {
     version: "1.0.0",
     endpoints: {
       users: "/api/v1/users",
-      fpos: "/api/v1/fpos"
+      fpos: "/api/v1/fpos",
+      farmers: "/api/v1/farmers"
     }
   });
 });
