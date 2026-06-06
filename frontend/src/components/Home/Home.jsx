@@ -1,8 +1,12 @@
 import React from 'react'
+import ButtonAppBar from '../appbar/appbar'
+
 
 function Home() {
   return (
-    <div><h1>Home</h1></div>
+    <div>
+        <ButtonAppBar/>
+    </div>
   )
 }
 
